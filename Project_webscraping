@@ -1,0 +1,257 @@
+library(rvest)
+library(dplyr)
+library(plyr)
+library(data.table)
+library(stringr)
+
+
+alph <- c("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", 
+          "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z")
+all_fighters <- c(First=character(), Last=character(), Nickname=character(), Ht.=character(), Wt.=character(), Reach=character(), 
+                  Stance=character(), W=character(), L=character(), D=character())
+
+#Create a trim function which uses regular expressions to clean white space
+trim <- function( x ) {
+  gsub("(^[[:space:]]+|[[:space:]]+$)", "", x)
+}
+
+for(i in 1:length(alph)){
+theurl<-paste0("http://ufcstats.com/statistics/fighters?char=",alph[i],"&page=all")
+
+#Download/Read the HTML
+html<-read_html(theurl)
+
+#Use CSS selector to figure out what table to read
+get_roster <- html_nodes(html,".b-statistics__table") 
+
+#Make previous object into a table
+table_p<-html_table(get_roster) 
+
+#Turn table into a data frame
+Fighters <-data.frame(table_p[[1]]) 
+Fighters <- Fighters[,1:10]
+
+#Build Container for links
+all_links<-data.frame(html=character()) 
+for(j in 1:nrow(Fighters)){
+  #This is the player link to grab their stats later
+  get_links<-html_nodes(html, paste0(".b-statistics__table-row:nth-child(", j,") .b-link_style_black")) %>% html_attr("href") 
+  link<-data.frame(get_links[1])
+  link<-link %>% dplyr::rename(html=1)
+  all_links<-rbind(all_links, link) #Bind All Link Data
+}
+
+#Column Bind player data and links
+Fighters<-cbind(Fighters, all_links)
+
+
+all_fighters<-rbind(all_fighters, Fighters)  #Bind all players into one table
+print(paste0("Finished Fighters with Letter : ", alph[i]))  #See where we are in the process
+}
+
+
+### Inspect Results
+head(all_fighters)
+### Clean up Data a bit
+all_fighters <- all_fighters %>% subset(!(First==""|Last==""|Ht.=="--"|Wt.=="--"))
+
+
+### Prepare to pull data for every fight
+sites <- all_fighters$html
+
+### REVISIT TO DUPLICATE COLUMNS
+Career_stats <- c(W.L=character(), Fighter=character(), Kd=character(), Str=character(), Td=character(), Sub=character(), 
+                  Event=character(), Method=character(), Round=character(), Time=character())
+
+
+
+all_fighters$fighter.id <- gsub("http://ufcstats.com/fighter-details", "", all_fighters$html)
+id <- all_fighters$fighter.id
+fighter <- all_fighters$Last
+
+for(j in 1:length(id)){
+  website <- paste0("http://ufcstats.com/fighter-details",id[j])
+  
+  #Download/Read the HTML
+  site <-read_html(website)
+  get_career_stats <- html_nodes(site, ".b-statistics__section_details")
+  
+  #Make previous object into a table
+  table_c.stats<-html_table(get_career_stats)
+  
+  fight_stats <- data.frame(table_c.stats[[1]])
+  fight_stats <- fight_stats %>% subset(!(W.L==""))
+  
+  Career_stats <- rbind(Career_stats, fight_stats)
+  print(paste0("Finished with Fighter : ", fighter[j])) 
+}
+
+### CLEANING
+
+### This works to clean the dataset but it'd be better to develop iterative processes
+### First and Last name of Fighter examined
+Career_stats$First <- trim((laply(strsplit(as.character(Career_stats$Fighter), split = " "), "[",1)))
+Career_stats$Last <- trim((laply(strsplit(as.character(Career_stats$Fighter), split = " "), "[",2)))
+### First and Last name of Opponent
+Career_stats$Opp_First <- word(Career_stats$Fighter,-2)
+Career_stats$Opp_Last <- word(Career_stats$Fighter,-1)
+
+### Clean Kd 
+Career_stats$F.Kd <- trim((laply(strsplit(as.character(Career_stats$Kd), split = " "), "[",1)))
+Career_stats$Opp.Kd <- word(Career_stats$Kd,-1)
+
+### Clean Str
+Career_stats$F.Str <- trim((laply(strsplit(as.character(Career_stats$Str), split = " "), "[",1)))
+Career_stats$Opp.Str <- word(Career_stats$Str,-1)
+
+### Clean Td
+Career_stats$F.Td <- trim((laply(strsplit(as.character(Career_stats$Td), split = " "), "[",1)))
+Career_stats$Opp.Td <- word(Career_stats$Td,-1)
+
+### Clean Sub
+Career_stats$F.Sub <- trim((laply(strsplit(as.character(Career_stats$Sub), split = " "), "[",1)))
+Career_stats$Opp.Sub <- word(Career_stats$Sub,-1)
+
+### Reordering the columns
+Career_stats2 <- dplyr::select(Career_stats, 1, 7:22)
+Career_stats2 <- dplyr::select(Career_stats2, 1,6,7,4,5,10,12,14,16,8,9,11,13,15,17,3,2)
+
+### Clean up Data a bit
+Career_stats3 <- Career_stats2 %>% subset(!(First==""|Last==""|Opp_First==""|Opp_Last==""))
+
+### Preparing to join fighter traits to wins/loss data
+### Fighter of interest
+F.fighter <- data.frame(First = all_fighters$First, Last= all_fighters$Last, F.Nickname = all_fighters$Nickname, 
+                        F.Ht. = all_fighters$Ht., F.Wt.= all_fighters$Wt., F.Reach = all_fighters$Reach, 
+                        F.Stance = all_fighters$Stance, F.W = all_fighters$W, F.L=all_fighters$L, F.D=all_fighters$D)
+### Opponent's statistics
+Opp.fighter <- data.frame(Opp_First = all_fighters$First, Opp_Last= all_fighters$Last, Opp.Nickname = all_fighters$Nickname, 
+                          Opp.Ht. = all_fighters$Ht., Opp.Wt.= all_fighters$Wt., Opp.Reach = all_fighters$Reach, 
+                          Opp.Stance = all_fighters$Stance, Opp.W = all_fighters$W, Opp.L=all_fighters$L, Opp.D=all_fighters$D)
+
+###### left join in R using merge() function 
+Opp.stats.added = merge(x=Career_stats3, y=Opp.fighter, by=c("Opp_Last", "Opp_First"), all.x=TRUE)
+Full.data = merge(x=Opp.stats.added, y=F.fighter, by=c("Last", "First"),all.x=TRUE)
+
+
+### More cleaning (Binary outcome of wins or losses)
+Full.data <- Full.data %>% subset(!(F.Str=="Matchup"|F.Str=="--"))
+Losses <- Full.data %>% subset(W.L=="loss")
+Wins <- Full.data %>% subset(W.L == "win")
+Wins.Losses <- Full.data %>% subset(W.L == "win"|W.L == "loss")
+
+table(Full.data$Opp.Stance)
+
+### See how southpaws and orthodox stances compared
+SP.vs.Orth <- Wins.Losses %>% subset(F.Stance == "Orthodox"& Opp.Stance == "Southpaw" | F.Stance == "Southpaw"&Opp.Stance == "Orthodox")
+SP.Wins <- SP.vs.Orth %>% subset(W.L == "win" & F.Stance == "Southpaw" & Opp.Stance == "Orthodox")
+Orth.Wins <- SP.vs.Orth %>% subset(W.L == "win" & F.Stance == "Orthodox" & Opp.Stance == "Southpaw")
+
+### Compare Switch Stance to Orthodox and Southpaw
+SP.vs.SW <- Wins.Losses %>% subset(F.Stance == "Switch"& Opp.Stance == "Southpaw" | F.Stance == "Southpaw"&Opp.Stance == "Switch")
+SP.Wins.v.SW <- SP.vs.SW %>% subset(W.L == "win" & F.Stance == "Southpaw" & Opp.Stance == "Switch")
+SW.Wins.v.SP <- SP.vs.SW %>% subset(W.L == "win" & F.Stance == "Switch" & Opp.Stance == "Southpaw")
+
+SW.vs.Orth <- Wins.Losses %>% subset(F.Stance == "Orthodox"& Opp.Stance == "Switch" | F.Stance == "Switch"&Opp.Stance == "Orthodox")
+SW.Wins.v.Orth <- SW.vs.Orth %>% subset(W.L == "win" & F.Stance == "Switch" & Opp.Stance == "Orthodox")
+Orth.Wins.v.SW <- SW.vs.Orth %>% subset(W.L == "win" & F.Stance == "Orthodox" & Opp.Stance == "Switch")
+
+
+### Changing columns to numeric
+Full.data$F.Kd <- as.numeric(Full.data$F.Kd)
+Full.data$Opp.Kd <- as.numeric(Full.data$Opp.Kd)
+Full.data$F.Str <- as.numeric(Full.data$F.Str)
+Full.data$Opp.Str <- as.numeric(Full.data$Opp.Str)
+Full.data$F.Td <- as.numeric(Full.data$F.Td)
+Full.data$Opp.Td <- as.numeric(Full.data$Opp.Td)
+Full.data$F.Sub <- as.numeric(Full.data$F.Sub)
+Full.data$Opp.Sub <- as.numeric(Full.data$Opp.Sub)
+
+### Changing Height to numeric/convert to inches
+X <- Full.data$F.Ht.
+Y <- trim((laply(strsplit(as.character(X), split = " "), "[",1)))
+Z <- word(X,-1)
+Y <- gsub("[^0-9.-]", "", Y)
+Z <- gsub("[^0-9.-]", "", Z)
+Y <- as.numeric(Y)
+Z <- as.numeric(Z)
+ft.to.inch <- Y*12
+Ht.inch <- ft.to.inch+Z
+Full.data$F.Ht.In <- Ht.inch
+X <- Full.data$Opp.Ht.
+Y <- trim((laply(strsplit(as.character(X), split = " "), "[",1)))
+Z <- word(X,-1)
+Y <- gsub("[^0-9.-]", "", Y)
+Z <- gsub("[^0-9.-]", "", Z)
+Y <- as.numeric(Y)
+Z <- as.numeric(Z)
+ft.to.inch <- Y*12
+Ht.inch <- ft.to.inch+Z
+Full.data$Opp.Ht.In <- Ht.inch
+
+
+### Reach Advantage? 
+Reach <- Full.data %>% subset(!(F.Reach=="--"|Opp.Reach=="--"))
+Reach$F.Reach <- as.numeric(substr(Reach$F.Reach, 1, 2))
+Reach$Opp.Reach <- as.numeric(substr(Reach$Opp.Reach, 1, 2))
+
+Wins.Losses <- Reach %>% subset(W.L == "win"|W.L == "loss")
+ReachDisparity <- Wins.Losses %>% subset(!(F.Reach==Opp.Reach))
+
+ReachDis <- ReachDisparity %>% subset(W.L == "win" & F.Reach<Opp.Reach)
+ReachAdv <- ReachDisparity %>% subset(W.L == "win" & F.Reach>Opp.Reach)
+
+### How about reach advantages greater than an inch? 
+ReachDisparity2 <- Wins.Losses %>% subset(abs(F.Reach-Opp.Reach)>1)
+ReachDis <- ReachDisparity2 %>% subset(W.L == "win" & F.Reach<Opp.Reach)
+ReachAdv <- ReachDisparity2 %>% subset(W.L == "win" & F.Reach>Opp.Reach)
+
+### How about a reach advantage greater than 3"
+ReachDisparity3 <- Wins.Losses %>% subset(abs(F.Reach-Opp.Reach)>3)
+ReachDis <- ReachDisparity3 %>% subset(W.L == "win" & F.Reach<Opp.Reach)
+ReachAdv <- ReachDisparity3 %>% subset(W.L == "win" & F.Reach>Opp.Reach)
+
+### How about a reach advantage greater than 5"
+ReachDisparity5 <- Wins.Losses %>% subset(abs(F.Reach-Opp.Reach)>5)
+ReachDis <- ReachDisparity5 %>% subset(W.L == "win" & F.Reach<Opp.Reach)
+ReachAdv <- ReachDisparity5 %>% subset(W.L == "win" & F.Reach>Opp.Reach)
+
+### How about a reach advantage greater than 8"
+ReachDisparity8 <- Wins.Losses %>% subset(abs(F.Reach-Opp.Reach)>8)
+ReachDis <- ReachDisparity8 %>% subset(W.L == "win" & F.Reach<Opp.Reach)
+ReachAdv <- ReachDisparity8 %>% subset(W.L == "win" & F.Reach>Opp.Reach)
+
+
+### Height Advantage ? 
+Wins.Losses <- Full.data %>% subset(W.L == "win"|W.L == "loss")
+HeightDisparity <- Wins.Losses %>% subset(!(F.Ht.In==Opp.Ht.In))
+### General differences in height
+H.shrt.win <- HeightDisparity %>% subset(W.L == "win" & F.Ht.In<Opp.Ht.In)
+H.tall.win <- HeightDisparity %>% subset(W.L == "win" & F.Ht.In>Opp.Ht.In)
+
+### How about a height advantage greater than 3"
+HeightDisparity3 <- Wins.Losses %>% subset(abs(F.Ht.In-Opp.Ht.In)>3)
+H.shrt.win <- HeightDisparity3 %>% subset(W.L == "win" & F.Ht.In<Opp.Ht.In)
+H.tall.win <- HeightDisparity3 %>% subset(W.L == "win" & F.Ht.In>Opp.Ht.In)
+
+### How about a height advantage greater than 6"
+HeightDisparity6 <- Wins.Losses %>% subset(abs(F.Ht.In-Opp.Ht.In)>6)
+H.shrt.win <- HeightDisparity6 %>% subset(W.L == "win" & F.Ht.In<Opp.Ht.In)
+H.tall.win <- HeightDisparity6 %>% subset(W.L == "win" & F.Ht.In>Opp.Ht.In)
+
+HeightEqual <- Wins.Losses %>% subset(F.Ht.In==Opp.Ht.In)
+
+
+### General Data Insight
+Wins.Losses <- Full.data %>% subset(W.L == "win"|W.L == "loss")
+Weight.Class <- Wins.Losses %>% subset(Wins.Losses$F.Wt.=="115 lbs."|Wins.Losses$F.Wt.=="125 lbs."|Wins.Losses$F.Wt.=="135 lbs."|
+                                          Wins.Losses$F.Wt.=="145 lbs."|Wins.Losses$F.Wt.=="155 lbs."|Wins.Losses$F.Wt.=="170 lbs."|
+                                          Wins.Losses$F.Wt.=="185 lbs."|Wins.Losses$F.Wt.=="205 lbs."|Wins.Losses$F.Wt.=="260 lbs.")
+# Strikes landed per weight class
+aggregate(Weight.Class$F.Str, list(Weight.Class$F.Wt.), mean)
+# Takedowns landed per weight class
+aggregate(Weight.Class$F.Td, list(Weight.Class$F.Wt.), mean)
+# Submission attempts awarded per weight class 
+aggregate(Weight.Class$F.Sub, list(Weight.Class$F.Wt.), mean)
+# Average round length per weight class
+aggregate(Weight.Class$Round, list(Weight.Class$F.Wt.), mean)
